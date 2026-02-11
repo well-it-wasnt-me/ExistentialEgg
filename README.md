@@ -12,6 +12,17 @@ You feed it, it stares back, both of you question reality.
 - Applies offline progress, so neglect still counts even when you pretend you were "busy."
 - Saves state to NVS with a CRC check to protect your hard-earned digital guilt.
 
+## Small Gallery
+
+| UI     | Image                                                     |
+|--------|-----------------------------------------------------------|
+| Helper | <img height="auto" src="assets/helper.jpeg" width="200"/> |
+| Home   | <img height="auto" src="assets/home.jpeg" width="200"/>   |
+| Menu   | <img height="auto" src="assets/menu.jpeg" width="200"/>   |
+| Status | <img height="auto" src="assets/status.jpeg" width="200"/> |
+
+I know, i know. The UI could use some improvements...
+
 ## Build and Upload
 ```bash
 pio run -t upload
