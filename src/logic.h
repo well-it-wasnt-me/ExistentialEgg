@@ -20,7 +20,7 @@ void handleButtons();
 void handleMessageTimeout();
 
 /**
- * @brief Apply idle behavior (auto-sleep) after UI inactivity.
+ * @brief Idle hook (currently no-op; sleep is RTC schedule driven).
  */
 void handleIdle();
 

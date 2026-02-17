@@ -43,6 +43,10 @@ void setup() {
   gRun.inventoryIndex = 0;
   gRun.helpScroll = 0;
   gRun.mgActive = false;
+  gRun.devModeUnlocked = false;
+  gRun.debugOverlay = false;
+  gRun.devSeqLen = 0;
+  gRun.devSeqStartedMs = 0;
   gRun.dirty = true;
 
   saveState(true);

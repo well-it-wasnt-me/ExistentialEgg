@@ -129,7 +129,7 @@ static void drawHomeIconRow(int y, bool topRow) {
           drawCircleCompat(gSprite, cx, cy, 4, UI_FG);
           drawLineCompat(gSprite, cx - 2, cy - 2, cx + 2, cy + 2, UI_FG);
           break;
-        case 1: // train
+        case 1: // scold
           drawRectCompat(gSprite, cx - 6, cy - 4, 5, 8, UI_FG);
           drawRectCompat(gSprite, cx + 1, cy - 4, 5, 8, UI_FG);
           drawLineCompat(gSprite, cx, cy - 3, cx, cy + 3, UI_FG);
@@ -370,6 +370,41 @@ static void drawHeader(const char *title, uint8_t size = 1) {
   }
 }
 
+static uint32_t secondsUntil(uint32_t targetEpoch) {
+  if (targetEpoch == 0) return 0;
+  uint32_t nowEpoch = 0;
+  if (!getCurrentEpoch(nowEpoch)) return 0;
+  if (targetEpoch <= nowEpoch) return 0;
+  return targetEpoch - nowEpoch;
+}
+
+static void drawDebugOverlay() {
+  if (!gRun.devModeUnlocked || !gRun.debugOverlay) return;
+
+  drawRectCompat(gSprite, 4, 144, 192, 30, UI_FG);
+
+  uint8_t alertMask = getActiveAlertMask();
+  uint8_t alertCount = getActiveAlertCount();
+
+  char line1[28];
+  snprintf(line1, sizeof(line1), "CM:%u AL:%u M:%02X", gState.careMistakes,
+           alertCount, alertMask);
+  drawText(8, 148, line1, 1);
+
+  uint32_t tSeconds = isTantrumActive() ? secondsUntil(gState.tantrumUntilEpoch)
+                                        : secondsUntil(gState.nextTantrumEpoch);
+  char line2[28];
+  snprintf(line2, sizeof(line2), "TN:%lum %s", (unsigned long)(tSeconds / 60),
+           isTantrumActive() ? "ACTIVE" : "NEXT");
+  drawText(8, 158, line2, 1);
+
+  char line3[40];
+  snprintf(line3, sizeof(line3), "R:%u/%u/%u/%u/%u", gState.hunger,
+           gState.happiness, gState.cleanliness, gState.discipline,
+           gState.health);
+  drawText(8, 168, line3, 1);
+}
+
 static void renderHome() {
   clearSpriteCompat(gSprite, 0);
   setTextColorMono(false);
@@ -402,16 +437,19 @@ static void renderHome() {
   if (gState.sick) {
     drawTextRight(playX + playW - 6, playY + 14, "Sick", 1);
   }
+  if (isTantrumActive()) {
+    drawTextRight(playX + playW - 6, playY + 26, "!", 2);
+  }
 
   drawHomeIconRow(126, false);
 
   drawDivider(142);
   drawStatMini(8, 146, "HU", gState.hunger);
-  drawStatMini(8, 160, "EN", gState.energy);
+  drawStatMini(8, 160, "DS", gState.discipline);
   drawStatMini(108, 146, "CL", gState.cleanliness);
   drawStatMini(108, 160, "HP", gState.happiness);
 
-  const char *action = gState.asleep ? "B Wake" : "B Play";
+  const char *action = gState.asleep ? "B Light" : "B Play";
   drawSoftkeys("A Menu", action, "C Status");
 }
 
@@ -457,14 +495,16 @@ static void renderStatus() {
   clearSpriteCompat(gSprite, 0);
   setTextColorMono(false);
   drawHeader("Status");
+  if (isTantrumActive()) {
+    drawTextRight(SCREEN_W - 8, 24, "!", 2);
+  }
 
   int y = 52;
   drawStatMini(8, y, "HL", gState.health);
   drawStatMini(8, y + 14, "HU", gState.hunger);
   drawStatMini(8, y + 28, "HP", gState.happiness);
   drawStatMini(8, y + 42, "CL", gState.cleanliness);
-  drawStatMini(8, y + 56, "EN", gState.energy);
-  drawStatMini(8, y + 70, "DS", gState.discipline);
+  drawStatMini(8, y + 56, "DS", gState.discipline);
 
   char buf[24];
   uint32_t days = gState.ageMinutes / (24 * 60);
@@ -481,10 +521,12 @@ static void renderStatus() {
   drawText(110, 118, buf, 1);
   snprintf(buf, sizeof(buf), "Sleep: %s", gState.asleep ? "Yes" : "No");
   drawText(110, 130, buf, 1);
-  snprintf(buf, sizeof(buf), "Bat: %u%%", getBatteryPercent());
+  snprintf(buf, sizeof(buf), "CM: %u", gState.careMistakes);
   drawText(110, 142, buf, 1);
 
-  drawSoftkeys("A Back", "B Inv", "C Reset");
+  drawDebugOverlay();
+  drawSoftkeys("A Back", gRun.devModeUnlocked ? "B Inv/Dbg" : "B Inv",
+               "C Reset");
 }
 
 static void renderResetConfirm() {
@@ -573,7 +615,7 @@ static void renderHelp() {
       "G27: Toggle Status",
       "",
       "Home",
-      "A Menu  B Play/Wake",
+      "A Menu  B Play/Light",
       "C Status",
       "",
       "Reset",
@@ -583,8 +625,8 @@ static void renderHelp() {
       "",
       "Legend",
       "HL Health  HU Hunger",
-      "EN Energy  CL Clean",
-      "HP Happy   DS Discipline"};
+      "HP Happy   CL Clean",
+      "DS Discipline"};
 
   const int startY = 52;
   const int lineH = 12;

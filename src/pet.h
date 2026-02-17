@@ -22,9 +22,8 @@ static const int SCREEN_H = 200;
  * Yes, these are magic values. No, they are not self-healing.
  */
 static const uint32_t MAGIC = 0x54414D41; // "TAMA"
-static const uint16_t STATE_VERSION = 1;
+static const uint16_t STATE_VERSION = 2;
 static const uint32_t SAVE_INTERVAL_MS = 2 * 60 * 1000;
-static const uint32_t UI_IDLE_SLEEP_MS = 3 * 60 * 1000;
 static const uint32_t TICK_INTERVAL_MS = 60 * 1000;
 static const uint32_t MAX_OFFLINE_MINUTES = 7 * 24 * 60; // one week
 
@@ -66,6 +65,17 @@ enum ItemType {
   ITEM_MED,
   ITEM_TOY,
   ITEM_COUNT
+};
+
+/** @brief Attention reasons that can generate care mistakes. */
+enum AttentionReason {
+  ATTN_HUNGER,
+  ATTN_HAPPINESS,
+  ATTN_POOP,
+  ATTN_SICK,
+  ATTN_LIGHTS,
+  ATTN_TANTRUM,
+  ATTN_COUNT
 };
 
 /** @brief Shop/inventory definition for a single item type. */
@@ -113,7 +123,7 @@ struct PetState {
   uint8_t hunger;      // 0-100
   uint8_t happiness;   // 0-100
   uint8_t cleanliness; // 0-100
-  uint8_t energy;      // 0-100
+  uint8_t energy;      // hidden/internal (legacy)
   uint8_t health;      // 0-100
   uint8_t discipline;  // 0-100
   uint8_t weight;      // 0-100
@@ -121,11 +131,48 @@ struct PetState {
   uint8_t poop;
   bool asleep;
   bool sick;
+  bool lightsOn;
+  bool medGuaranteePending;
 
   uint8_t invFood;
   uint8_t invSnack;
   uint8_t invMed;
   uint8_t invToy;
+
+  /** @brief Care mistakes accumulated over the pet lifetime. */
+  uint16_t careMistakes;
+  /** @brief Snapshot of `careMistakes` at stage start for stage scoring. */
+  uint16_t stageStartMistakes;
+  /** @brief Sickness chance multiplier in permille (1000 = 1.0x). */
+  uint16_t sicknessRiskPermille;
+
+  /** @brief Minutes spent with low hunger for sickness checks. */
+  uint16_t lowHungerMinutes;
+  /** @brief Minutes spent with low happiness for sickness checks. */
+  uint16_t lowHappinessMinutes;
+
+  /** @brief Per-minute drift accumulators to avoid truncation dead zones. */
+  int16_t hungerAcc;
+  int16_t happinessAcc;
+  int16_t disciplineAcc;
+  int16_t cleanlinessAcc;
+  int16_t healthAcc;
+
+  /** @brief Time accumulators for periodic events. */
+  uint16_t poopMinuteAcc;
+  uint16_t coinMinuteAcc;
+
+  /** @brief Medicine timing and guarantee tracking. */
+  uint32_t lastMedicineEpoch;
+
+  /** @brief Tantrum scheduler and state. */
+  uint32_t nextTantrumEpoch;
+  uint32_t tantrumUntilEpoch;         // 0 when inactive
+  uint32_t tantrumCooldownUntilEpoch; // block retrigger after failure
+
+  /** @brief Per-reason attention state for care-mistake timing. */
+  uint32_t attentionSinceEpoch[ATTN_COUNT];
+  uint32_t attentionCooldownUntilEpoch[ATTN_COUNT];
 };
 
 /**
@@ -167,6 +214,17 @@ struct RuntimeState {
   uint8_t mgTarget; // 0=A,1=B,2=C
   /** @brief Mini-game timeout deadline (`millis`). */
   uint32_t mgDeadlineMs;
+
+  /** @brief Hidden developer mode unlocked via button sequence. */
+  bool devModeUnlocked;
+  /** @brief Runtime debug overlay visibility toggle. */
+  bool debugOverlay;
+  /** @brief Input ring buffer for the developer sequence. */
+  uint8_t devSeqBuf[7];
+  /** @brief Number of valid entries currently in `devSeqBuf`. */
+  uint8_t devSeqLen;
+  /** @brief Start time for the current developer sequence attempt (`millis`). */
+  uint32_t devSeqStartedMs;
 };
 
 /** @brief Global persistent pet state instance. */
@@ -190,6 +248,12 @@ uint8_t clampU8(int v);
  */
 uint8_t getBatteryPercent();
 /**
+ * @brief Read current RTC epoch if available.
+ * @param outEpoch Output epoch seconds.
+ * @return `true` when RTC time is valid.
+ */
+bool getCurrentEpoch(uint32_t &outEpoch);
+/**
  * @brief Mark runtime state as needing a redraw and refresh idle timer.
  *
  * Because nothing says "responsive UI" like a dirty flag.
@@ -201,6 +265,26 @@ void markDirty();
  * @param durationMs How long to show the message in milliseconds.
  */
 void showMessage(const char *msg, uint32_t durationMs);
+/**
+ * @brief Resolve an active tantrum by scolding.
+ * @return `true` when a tantrum was active and resolved.
+ */
+bool resolveTantrumByScold();
+/**
+ * @brief Whether a tantrum is currently active.
+ * @return `true` if tantrum timer is running.
+ */
+bool isTantrumActive();
+/**
+ * @brief Compute currently active attention reasons as bitmask.
+ * @return Bitmask using `AttentionReason` ordinals.
+ */
+uint8_t getActiveAlertMask();
+/**
+ * @brief Compute count of currently active attention reasons.
+ * @return Number of active alerts.
+ */
+uint8_t getActiveAlertCount();
 /**
  * @brief Compute the pet mood from current stats.
  * @return Derived mood bucket.

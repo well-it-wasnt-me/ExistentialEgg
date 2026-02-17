@@ -26,6 +26,9 @@ static auto btnC() -> decltype(btnCImpl(M5, 0)) { return btnCImpl(M5, 0); }
 
 static const uint8_t GPIO_TOP_HOME = 5;    // top hardware button
 static const uint8_t GPIO_SIDE_QUICK = 27; // side hardware button
+static const uint32_t DEV_SEQUENCE_WINDOW_MS = 5000;
+static const uint32_t MED_GUARANTEE_WINDOW_SECONDS = 30 * 60;
+static const uint8_t DEV_SEQUENCE[] = {0, 0, 2, 1, 2, 1, 0}; // A A C B C B A
 
 static bool gGpioButtonsInit = false;
 static bool gTopWasDown = false;
@@ -48,6 +51,57 @@ static bool readGpioPressed(uint8_t pin, bool &wasDown) {
   return pressed;
 }
 
+static uint32_t nowEpochOrLastKnown() {
+  uint32_t nowEpoch = 0;
+  if (getCurrentEpoch(nowEpoch)) return nowEpoch;
+  return gState.lastEpoch;
+}
+
+static void resetDevSequenceState() {
+  gRun.devSeqLen = 0;
+  gRun.devSeqStartedMs = 0;
+}
+
+static bool updateDevSequence(uint8_t key) {
+  uint32_t now = millis();
+  if (gRun.devSeqLen > 0 &&
+      now - gRun.devSeqStartedMs > DEV_SEQUENCE_WINDOW_MS) {
+    resetDevSequenceState();
+  }
+
+  if (gRun.devSeqLen == 0) {
+    if (gRun.screen != SCREEN_HOME || key != DEV_SEQUENCE[0]) return false;
+    gRun.devSeqBuf[0] = key;
+    gRun.devSeqLen = 1;
+    gRun.devSeqStartedMs = now;
+    return false;
+  }
+
+  if (key == DEV_SEQUENCE[gRun.devSeqLen]) {
+    gRun.devSeqBuf[gRun.devSeqLen] = key;
+    ++gRun.devSeqLen;
+
+    if (gRun.devSeqLen == sizeof(DEV_SEQUENCE)) {
+      gRun.devModeUnlocked = true;
+      gRun.debugOverlay = false;
+      resetDevSequenceState();
+      showMessage("DEV MODE", 1500);
+      return true;
+    }
+    return false;
+  }
+
+  if (gRun.screen == SCREEN_HOME && key == DEV_SEQUENCE[0]) {
+    gRun.devSeqBuf[0] = key;
+    gRun.devSeqLen = 1;
+    gRun.devSeqStartedMs = now;
+    return false;
+  }
+
+  resetDevSequenceState();
+  return false;
+}
+
 static void goHomeShortcut() {
   if (gRun.screen == SCREEN_MINIGAME) {
     gRun.mgActive = false;
@@ -66,51 +120,72 @@ static void sideQuickAction() {
 
 static void doFeed(bool isSnack) {
   if (isSnack) {
-    gState.hunger = clampU8(gState.hunger + 15);
-    gState.happiness = clampU8(gState.happiness + 10);
-    gState.weight = clampU8(gState.weight + 2);
+    gState.hunger = clampU8(gState.hunger + 12);
+    gState.happiness = clampU8(gState.happiness + 18);
+    gState.weight = clampU8(gState.weight + 4);
   } else {
-    gState.hunger = clampU8(gState.hunger + 25);
-    gState.happiness = clampU8(gState.happiness + 4);
-    gState.weight = clampU8(gState.weight + 1);
+    gState.hunger = clampU8(gState.hunger + 30);
+    gState.weight = clampU8(gState.weight + 2);
   }
   showMessage(isSnack ? "Snack time!" : "Fed!", 1200);
 }
 
 static void doPlay() {
-  gState.happiness = clampU8(gState.happiness + 20);
-  gState.energy = clampU8(gState.energy - 12);
+  gState.happiness = clampU8(gState.happiness + 18);
   gState.hunger = clampU8(gState.hunger - 6);
   showMessage("Play time!", 1200);
 }
 
 static void doClean() {
-  gState.cleanliness = 100;
+  gState.cleanliness = clampU8(gState.cleanliness + 25);
   gState.poop = 0;
   showMessage("All clean!", 1200);
 }
 
 static void doMedicine() {
-  if (!gState.sick && gState.health > 85) {
+  if (!gState.sick) {
     showMessage("No medicine needed", 1400);
+    gState.medGuaranteePending = false;
     return;
   }
-  gState.sick = false;
-  gState.health = clampU8(gState.health + 25);
-  gState.happiness = clampU8(gState.happiness - 5);
-  showMessage("Feeling better", 1400);
+
+  uint32_t nowEpoch = nowEpochOrLastKnown();
+  bool guaranteed = gState.medGuaranteePending && gState.lastMedicineEpoch != 0 &&
+                    nowEpoch != 0 && nowEpoch >= gState.lastMedicineEpoch &&
+                    (nowEpoch - gState.lastMedicineEpoch <=
+                     MED_GUARANTEE_WINDOW_SECONDS);
+
+  bool cured = guaranteed || ((esp_random() % 100) < 85);
+
+  if (nowEpoch != 0) {
+    gState.lastMedicineEpoch = nowEpoch;
+  }
+
+  if (cured) {
+    gState.sick = false;
+    gState.medGuaranteePending = false;
+    showMessage("Recovered", 1300);
+  } else {
+    gState.medGuaranteePending = true;
+    showMessage("No effect", 1200);
+  }
 }
 
-static void doTrain() {
-  gState.discipline = clampU8(gState.discipline + 12);
+static void doScold() {
+  if (resolveTantrumByScold()) {
+    gState.discipline = clampU8(gState.discipline + 15);
+    gState.happiness = clampU8(gState.happiness - 8);
+    showMessage("Scolded", 1200);
+    return;
+  }
+
   gState.happiness = clampU8(gState.happiness - 4);
-  gState.energy = clampU8(gState.energy - 6);
-  showMessage("Training done", 1200);
+  showMessage("No tantrum", 1100);
 }
 
-static void doSleepToggle() {
-  gState.asleep = !gState.asleep;
-  showMessage(gState.asleep ? "Sleeping" : "Awake", 1200);
+static void doLightToggle() {
+  gState.lightsOn = !gState.lightsOn;
+  showMessage(gState.lightsOn ? "Lights on" : "Lights off", 1200);
 }
 
 static void doGameReset() {
@@ -121,6 +196,8 @@ static void doGameReset() {
   gRun.mgActive = false;
   gRun.mgTarget = 0;
   gRun.mgDeadlineMs = 0;
+  gRun.debugOverlay = false;
+  resetDevSequenceState();
   gRun.screen = SCREEN_HOME;
   showMessage("Game reset", 1600);
   saveState(true);
@@ -244,8 +321,8 @@ static void handleMenuSelect() {
     case 2: // Clean
       doClean();
       break;
-    case 3: // Sleep/Wake
-      doSleepToggle();
+    case 3: // Light on/off
+      doLightToggle();
       break;
     case 4: // Medicine
       if (gState.invMed > 0) {
@@ -255,8 +332,8 @@ static void handleMenuSelect() {
         showMessage("No medicine", 1200);
       }
       break;
-    case 5: // Train
-      doTrain();
+    case 5: // Scold
+      doScold();
       break;
     case 6: // Inventory
       gRun.screen = SCREEN_INVENTORY;
@@ -297,6 +374,10 @@ void handleButtons() {
     sideQuickAction();
     return;
   }
+
+  if (a && updateDevSequence(0)) return;
+  if (b && updateDevSequence(1)) return;
+  if (c && updateDevSequence(2)) return;
 
   if (gRun.screen == SCREEN_MINIGAME && gRun.mgActive) {
     if (a) {
@@ -353,7 +434,7 @@ void handleButtons() {
     switch (gRun.screen) {
       case SCREEN_HOME:
         if (gState.asleep)
-          doSleepToggle();
+          doLightToggle();
         else
           doPlay();
         break;
@@ -361,7 +442,12 @@ void handleButtons() {
         handleMenuSelect();
         break;
       case SCREEN_STATUS:
-        gRun.screen = SCREEN_INVENTORY;
+        if (gRun.devModeUnlocked) {
+          gRun.debugOverlay = !gRun.debugOverlay;
+          showMessage(gRun.debugOverlay ? "Debug ON" : "Debug OFF", 1100);
+        } else {
+          gRun.screen = SCREEN_INVENTORY;
+        }
         break;
       case SCREEN_INVENTORY:
         handleInventorySelect();
@@ -431,11 +517,5 @@ void handleMessageTimeout() {
 
 /** @copydoc handleIdle */
 void handleIdle() {
-  if (gRun.screen == SCREEN_MESSAGE) return;
-  if (millis() - gRun.lastUiActionMs > UI_IDLE_SLEEP_MS) {
-    if (!gState.asleep) {
-      gState.asleep = true;
-      showMessage("Auto sleep", 1200);
-    }
-  }
+  // Sleep/wake is now RTC schedule driven; idle no longer forces sleep.
 }
